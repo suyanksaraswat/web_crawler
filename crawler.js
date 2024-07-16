@@ -20,6 +20,50 @@ const crawl = async (startUrl, maxDepth) => {
     console.error("Error creating images directory:", error);
   }
 
+  const downloadImage = async (image, referer) => {
+    if (!image.src || !image.src.startsWith("http")) {
+      console.log(`Skipping invalid image URL: ${image.src}`);
+      return null;
+    }
+
+    try {
+      const response = await axios.get(image.src, {
+        responseType: "arraybuffer",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          Referer: referer,
+        },
+      });
+
+      const contentType = response.headers["content-type"];
+      if (!contentType || !contentType.startsWith("image/")) {
+        console.log(`Skipping non-image content: ${image.src}`);
+        return null;
+      }
+
+      const extension = contentType.split("/")[1];
+      const imageName = `${Date.now()}-${Math.floor(
+        Math.random() * 1000
+      )}.${extension}`;
+      const imagePath = path.join(imagesDir, imageName);
+
+      await fs.writeFile(imagePath, response.data);
+
+      return {
+        url: image.src,
+        page: referer,
+        filename: imageName,
+        alt: image.alt,
+        width: image.width,
+        height: image.height,
+      };
+    } catch (error) {
+      console.error(`Failed to download image: ${image.src}`, error.message);
+      return null;
+    }
+  };
+
   const crawlPage = async (url, currentDepth) => {
     if (currentDepth > maxDepth || visitedUrls.has(url)) {
       return;
@@ -57,51 +101,15 @@ const crawl = async (startUrl, maxDepth) => {
 
     console.log(`Found ${images.length} images on ${url}`);
 
-    for (const image of images) {
-      if (!image.src || !image.src.startsWith("http")) {
-        console.log(`Skipping invalid image URL: ${image.src}`);
-        continue;
+    const downloadPromises = images.map(image => downloadImage(image, url));
+    const downloadedImages = await Promise.all(downloadPromises);
+
+    downloadedImages.forEach(image => {
+      if (image) {
+        imageData.push(image);
+        console.log(`Downloaded: ${image.filename}`);
       }
-
-      try {
-        const response = await axios.get(image.src, {
-          responseType: "arraybuffer",
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            Referer: url,
-          },
-        });
-
-        const contentType = response.headers["content-type"];
-        if (!contentType || !contentType.startsWith("image/")) {
-          console.log(`Skipping non-image content: ${image.src}`);
-          continue;
-        }
-
-        const extension = contentType.split("/")[1];
-        const imageName = `${Date.now()}-${Math.floor(
-          Math.random() * 1000
-        )}.${extension}`;
-        const imagePath = path.join(imagesDir, imageName);
-
-        await fs.writeFile(imagePath, response.data);
-
-        imageData.push({
-          url: image.src,
-          page: url,
-          depth: currentDepth,
-          filename: imageName,
-          alt: image.alt,
-          width: image.width,
-          height: image.height,
-        });
-
-        console.log(`Downloaded: ${imageName}`);
-      } catch (error) {
-        console.error(`Failed to download image: ${image.src}`, error.message);
-      }
-    }
+    });
 
     if (currentDepth < maxDepth) {
       const links = await page.evaluate(() =>
